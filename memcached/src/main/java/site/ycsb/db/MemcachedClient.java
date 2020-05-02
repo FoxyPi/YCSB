@@ -35,7 +35,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Vector;
-
 import net.spy.memcached.ConnectionFactoryBuilder;
 import net.spy.memcached.FailureMode;
 // We also use `net.spy.memcached.MemcachedClient`; it is not imported
@@ -136,23 +135,23 @@ public class MemcachedClient extends DB {
 
   protected net.spy.memcached.MemcachedClient createMemcachedClient()
       throws Exception {
-    ConnectionFactoryBuilder connectionFactoryBuilder =
-        new ConnectionFactoryBuilder();
+    ConnectionFactoryBuilder udpConnectionFactoryBuilder =
+        new UDPConnFactoryBuilder();
 
-    connectionFactoryBuilder.setReadBufferSize(Integer.parseInt(
+    udpConnectionFactoryBuilder.setReadBufferSize(Integer.parseInt(
         getProperties().getProperty(READ_BUFFER_SIZE_PROPERTY,
                                     DEFAULT_READ_BUFFER_SIZE)));
 
-    connectionFactoryBuilder.setOpTimeout(Integer.parseInt(
+    udpConnectionFactoryBuilder.setOpTimeout(Integer.parseInt(
         getProperties().getProperty(OP_TIMEOUT_PROPERTY, DEFAULT_OP_TIMEOUT)));
 
     String protocolString = getProperties().getProperty(PROTOCOL_PROPERTY);
-    connectionFactoryBuilder.setProtocol(
+    udpConnectionFactoryBuilder.setProtocol(
         protocolString == null ? DEFAULT_PROTOCOL
                          : ConnectionFactoryBuilder.Protocol.valueOf(protocolString.toUpperCase()));
 
     String failureString = getProperties().getProperty(FAILURE_MODE_PROPERTY);
-    connectionFactoryBuilder.setFailureMode(
+    udpConnectionFactoryBuilder.setFailureMode(
         failureString == null ? FAILURE_MODE_PROPERTY_DEFAULT
                               : FailureMode.valueOf(failureString));
 
@@ -174,7 +173,7 @@ public class MemcachedClient extends DB {
       addresses.add(new InetSocketAddress(host, port));
     }
     return new net.spy.memcached.MemcachedClient(
-        connectionFactoryBuilder.build(), addresses);
+        udpConnectionFactoryBuilder.build(), addresses);
   }
 
   @Override
@@ -221,8 +220,10 @@ public class MemcachedClient extends DB {
       String table, String key, Map<String, ByteIterator> values) {
     key = createQualifiedKey(table, key);
     try {
+      
       OperationFuture<Boolean> future =
           memcachedClient().add(key, objectExpirationTime, toJson(values));
+      System.out.println("Returning");
       return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error inserting value", e);

@@ -266,6 +266,7 @@ public abstract class AbstractDBTestCases {
 
     // Insert a bunch of documents.
     for (int i = 0; i < 100; ++i) {
+      System.out.println("i: " + i);
       HashMap<String, ByteIterator> inserted =
           new HashMap<String, ByteIterator>();
       inserted.put("a", new ByteArrayByteIterator(new byte[] {
