@@ -29,7 +29,7 @@ public class UDPDefaultConnFactory extends DefaultConnectionFactory {
             return new UDPMemcachedNodeImpl(sa, c, DEFAULT_READ_BUFFER_SIZE, createReadOperationQueue(), 
                         createWriteOperationQueue(), createOperationQueue(), 
                         getOpQueueMaxBlockTime(), getOperationTimeout(),
-                        getAuthWaitTime());
+                        getAuthWaitTime(), this);
         } catch (SocketException e) {
             System.out.println("createMemcachedNode: Error while creating UDP node");
         }

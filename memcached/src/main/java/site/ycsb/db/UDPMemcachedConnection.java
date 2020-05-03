@@ -14,8 +14,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -51,6 +55,10 @@ public class UDPMemcachedConnection extends MemcachedConnection {
   private static final int EXCESSIVE_EMPTY = 0x1000000;
   private static final String OVERALL_RESPONSE_RETRY_METRIC =
     "[MEM] Response Rate: Retry";
+  private static final String SHUTD_QUEUE_METRIC =
+    "[MEM] Shutting Down Nodes (NodesToShutdown)";
+  private static final String RECON_QUEUE_METRIC =
+    "[MEM] Reconnecting Nodes (ReconnectQueue)";
 
   private static ConnectionFactory connectionFactory;
   private static int bufSize;
@@ -66,6 +74,10 @@ public class UDPMemcachedConnection extends MemcachedConnection {
   private final boolean verifyAliveOnConnect;
 
   private final ExecutorService listenerExecutorService;
+
+  private final long maxDelay;
+
+  private final SortedMap<Long, MemcachedNode> reconnectQueue;
 
 
   public UDPMemcachedConnection(final int bufSize, final ConnectionFactory f, final List<InetSocketAddress> a,
@@ -85,6 +97,10 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     }
 
     listenerExecutorService = f.getListenerExecutorService();
+  
+    maxDelay = TimeUnit.SECONDS.toMillis(f.getMaxReconnectDelay()); 
+    
+    reconnectQueue = new TreeMap<Long, MemcachedNode>();
   }
 
   private void handleReadsAndWrites(final SelectionKey sk,
@@ -99,8 +115,9 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     }
   }
 
+
   private void connected(final MemcachedNode node) {
-    assert node.getChannel().isConnected() : "Not connected.";
+    assert ((UDPMemcachedNodeImpl)node).getDatagramChannel().isConnected() : "Not connected.";
     int rt = node.getReconnectCount();
     node.connected();
 
@@ -117,6 +134,7 @@ public class UDPMemcachedConnection extends MemcachedConnection {
         
     for (SocketAddress sa : addrs) {
       DatagramChannel ch = DatagramChannel.open();
+      ch.bind(new InetSocketAddress("127.0.0.1", 3000));
       ch.configureBlocking(false);
       MemcachedNode qa = ((UDPDefaultConnFactory)connectionFactory).createMemcachedNode(sa, ch, bufSize);
       qa.setConnection(this);
@@ -233,43 +251,55 @@ public class UDPMemcachedConnection extends MemcachedConnection {
       node.removeCurrentReadOp();
       return;
     }
-    
-    ByteBuffer rbuf = node.getRbuf();
-    final DatagramChannel channel = ((UDPMemcachedNodeImpl)node).getDatagramChannel();
 
-    int read = channel.read(rbuf) - 2;
-    metrics.updateHistogram(OVERALL_AVG_BYTES_READ_METRIC, read);
-    //read preceding short identifying the packet number
-    rbuf.getShort();
+    DatagramChannel channel = ((UDPMemcachedNodeImpl)node).getDatagramChannel();
+    ByteBuffer datagramBuffer = ByteBuffer.allocateDirect(65536);
 
-    if (read < 0) {
-      currentOp = handleReadsWhenChannelEndOfStream(currentOp, node, rbuf);
-    }
+    if(channel.receive(datagramBuffer) != null){
+      ByteBuffer rbuf = node.getRbuf();
+      datagramBuffer.flip();
+      datagramBuffer.position(8);
+      int read = datagramBuffer.remaining();
 
-    while (read > 0) {
-      getLogger().debug("Read %d bytes", read);
+      rbuf.put(datagramBuffer);
+
       rbuf.flip();
-      while (rbuf.remaining() > 0) {
-        System.out.println("rbuf.remaining() > 0");
-        if (currentOp == null) {
-          throw new IllegalStateException("No read operation.");
-        }
+      byte[] b = new byte[read];
+      rbuf.get(b);
 
-        long timeOnWire =
-          System.nanoTime() - currentOp.getWriteCompleteTimestamp();
-        metrics.updateHistogram(OVERALL_AVG_TIME_ON_WIRE_METRIC,
-          (int)(timeOnWire / 1000));
-        metrics.markMeter(OVERALL_RESPONSE_METRIC);
-        synchronized(currentOp) {
-          readBufferAndLogMetrics(currentOp, rbuf, node);
-        }
+      System.out.println("Received: " + new String(b) + " Read: " + read);
 
-        currentOp = node.getCurrentReadOp();
+      metrics.updateHistogram(OVERALL_AVG_BYTES_READ_METRIC, read);
+
+      if (read < 0) {
+        currentOp = handleReadsWhenChannelEndOfStream(currentOp, node, rbuf);
       }
-      rbuf.clear();
-      read = channel.read(rbuf) - 2;
-      node.completedRead();
-    }
+
+      while (read > 0) {
+        getLogger().debug("Read %d bytes", read);
+        rbuf.flip();
+        while (rbuf.remaining() > 0) {
+          System.out.println("rbuf.remaining() > 0");
+          if (currentOp == null) {
+            throw new IllegalStateException("No read operation.");
+          }
+
+          long timeOnWire =
+            System.nanoTime() - currentOp.getWriteCompleteTimestamp();
+          metrics.updateHistogram(OVERALL_AVG_TIME_ON_WIRE_METRIC,
+            (int)(timeOnWire / 1000));
+          metrics.markMeter(OVERALL_RESPONSE_METRIC);
+          synchronized(currentOp) {
+            readBufferAndLogMetrics(currentOp, rbuf, node);
+          }
+
+          currentOp = node.getCurrentReadOp();
+        }
+        rbuf.clear();
+        //read = channel.read(rbuf) - 2;
+        node.completedRead();
+      }
+   }
   }
 
   private void readBufferAndLogMetrics(final Operation currentOp,
@@ -317,6 +347,7 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   private void handleInputQueue() {
     if (!addedQueue.isEmpty()) {
+      System.out.println("HandleInputQueue");
       getLogger().debug("Handling queue");
       Collection<MemcachedNode> toAdd = new HashSet<MemcachedNode>();
       Collection<MemcachedNode> todo = new HashSet<MemcachedNode>();
@@ -355,11 +386,11 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   @Override
   public void handleIO() throws IOException {
+    System.out.println("Handle IO");
     if (shutDown) {
       getLogger().debug("No IO while shut down.");
       return;
     }
-
     handleInputQueue();
 
     assert selectorsMakeSense() : "Selectors don't make sense.";
@@ -414,7 +445,7 @@ public class UDPMemcachedConnection extends MemcachedConnection {
   private boolean selectorsMakeSense() {
     for (MemcachedNode qa : locator.getAll()) {
       if (qa.getSk() != null && qa.getSk().isValid()) {
-        if (qa.getChannel().isConnected()) {
+        if (((UDPMemcachedNodeImpl)qa).getDatagramChannel().isConnected()) {
           int sops = qa.getSk().interestOps();
           int expected = 0;
           if (qa.hasReadOp()) {
@@ -553,6 +584,155 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     addedQueue.offer(node);
     if (node.getWbuf().hasRemaining()) {
       handleWrites(node);
+    }
+  }
+
+  private void handleShutdownQueue() throws IOException {
+    for (MemcachedNode qa : nodesToShutdown) {
+      if (!addedQueue.contains(qa)) {
+        nodesToShutdown.remove(qa);
+        metrics.decrementCounter(SHUTD_QUEUE_METRIC);
+        Collection<Operation> notCompletedOperations = qa.destroyInputQueue();
+        if (((UDPMemcachedNodeImpl)qa).getChannel() != null) {
+          ((UDPMemcachedNodeImpl)qa).getChannel().close();
+          qa.setSk(null);
+          if (qa.getBytesRemainingToWrite() > 0) {
+            getLogger().warn("Shut down with %d bytes remaining to write",
+              qa.getBytesRemainingToWrite());
+          }
+          //getLogger().debug("Shut down channel %s", qa.getChannel());
+        }
+        redistributeOperations(notCompletedOperations);
+      }
+    }
+  }
+
+  protected void queueReconnect(final MemcachedNode node) {
+    if (shutDown) {
+      return;
+    }
+    getLogger().warn("Closing, and reopening %s, attempt %d.", node,
+      node.getReconnectCount());
+
+    if (node.getSk() != null) {
+      node.getSk().cancel();
+      assert !node.getSk().isValid() : "Cancelled selection key is valid";
+    }
+    node.reconnecting();
+
+    DatagramChannel c = ((UDPMemcachedNodeImpl) node).getDatagramChannel();
+
+    if (c != null && c.socket() != null) {
+      c.socket().close();
+    } else {
+      getLogger().info("The channel or socket was null for %s", node);
+    }
+    
+    ((UDPMemcachedNodeImpl)node).setDatagramChannel(null);
+
+    long delay = (long) Math.min(maxDelay, Math.pow(2,
+        node.getReconnectCount())) * 1000;
+    long reconnectTime = System.currentTimeMillis() + delay;
+    while (reconnectQueue.containsKey(reconnectTime)) {
+      reconnectTime++;
+    }
+
+    reconnectQueue.put(reconnectTime, node);
+    metrics.incrementCounter(RECON_QUEUE_METRIC);
+
+    node.setupResend();
+    if (failureMode == FailureMode.Redistribute) {
+      redistributeOperations(node.destroyInputQueue());
+    } else if (failureMode == FailureMode.Cancel) {
+      cancelOperations(node.destroyInputQueue());
+    }
+  }
+
+  private void cancelOperations(final Collection<Operation> ops) {
+    for (Operation op : ops) {
+      op.cancel();
+    }
+  }
+
+  private void attemptReconnects() {
+    final long now = System.currentTimeMillis();
+    final Map<MemcachedNode, Boolean> seen =
+      new IdentityHashMap<MemcachedNode, Boolean>();
+    final List<MemcachedNode> rereQueue = new ArrayList<MemcachedNode>();
+    DatagramChannel ch = null;
+
+
+    Iterator<MemcachedNode> i = reconnectQueue.headMap(now).values().iterator();
+    while(i.hasNext()) {
+      final MemcachedNode node = i.next();
+      i.remove();
+      metrics.decrementCounter(RECON_QUEUE_METRIC);
+
+      try {
+        if (!belongsToCluster(node)) {
+          getLogger().debug("Node does not belong to cluster anymore, "
+            + "skipping reconnect: %s", node);
+          continue;
+        }
+
+        if (!seen.containsKey(node)) {
+          seen.put(node, Boolean.TRUE);
+          getLogger().info("Reconnecting %s", node);
+
+          ch = DatagramChannel.open();
+          ch.configureBlocking(false);
+          int ops = 0;
+          ch.connect(node.getSocketAddress());
+          if (ch.isConnected()) {
+            connected(node);
+            addedQueue.offer(node);
+            getLogger().info("Immediately reconnected to %s", node);
+            assert ch.isConnected();
+          } else {
+            ops = SelectionKey.OP_CONNECT;
+          }
+          ((UDPMemcachedNodeImpl)node).registerDatagramChannel(ch, ch.register(selector, ops, node));
+          assert ((UDPMemcachedNodeImpl)node).getDatagramChannel() == ch : "Channel was lost.";
+        } else {
+          getLogger().debug("Skipping duplicate reconnect request for %s",
+            node);
+        }
+      } catch (SocketException e) {
+        getLogger().warn("Error on reconnect", e);
+        rereQueue.add(node);
+      } catch (Exception e) {
+        getLogger().error("Exception on reconnect, lost node %s", node, e);
+      }
+    }
+
+    for (MemcachedNode n : rereQueue) {
+      queueReconnect(n);
+    }
+  }
+
+  @Override
+  public void shutdown() throws IOException {
+    shutDown = true;
+    try {
+      Selector s = selector.wakeup();
+      assert s == selector : "Wakeup returned the wrong selector.";
+      for (MemcachedNode node : locator.getAll()) {
+        DatagramChannel ch = ((UDPMemcachedNodeImpl)node).getDatagramChannel();
+        if (ch != null) {
+          ch.close();
+          node.setSk(null);
+          if (node.getBytesRemainingToWrite() > 0) {
+            getLogger().warn("Shut down with %d bytes remaining to write",
+              node.getBytesRemainingToWrite());
+          }
+          getLogger().debug("Shut down channel %s", ch);
+        }
+      }
+
+      selector.close();
+      getLogger().debug("Shut down selector %s", selector);
+    } finally {
+      running = false;
     }
   }
 }

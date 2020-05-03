@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.net.UnknownHostException;
@@ -14,12 +15,15 @@ import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import net.spy.memcached.ConnectionFactory;
+import net.spy.memcached.FailureMode;
 import net.spy.memcached.MemcachedConnection;
 import net.spy.memcached.MemcachedNode;
 import net.spy.memcached.ops.Operation;
@@ -48,18 +52,21 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     private volatile SelectionKey sk = null;
     private ArrayList<Operation> reconnectBlocked;
     private AtomicInteger reconnectAttempt = new AtomicInteger(1);
+    private final AtomicInteger continuousTimeout = new AtomicInteger(0);
     private CountDownLatch authLatch;
     private boolean shouldAuth = false;
     private final long authWaitTime;
     private DatagramChannel channel;
     private MemcachedConnection connection;
-
+    private ByteBuffer datagramBuffer;
+    private List<Integer> datagramSizes;
+    private final ConnectionFactory connectionFactory;
 
     private short requestId;
 
     public UDPMemcachedNodeImpl(SocketAddress sa, DatagramChannel c, int bufSize, BlockingQueue<Operation> rq, 
                 BlockingQueue<Operation> wq, BlockingQueue<Operation> iq, 
-                long opQueueMaxBlockTime, long dt, long authWaitTime) throws SocketException {
+                long opQueueMaxBlockTime, long dt, long authWaitTime, ConnectionFactory cf) throws SocketException {
 
         this.socketAddress = sa;
 
@@ -79,10 +86,24 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
         getWbuf().clear();
         this.authWaitTime = authWaitTime;
         setupForAuth();
-
+        datagramBuffer = ByteBuffer.allocateDirect(MAX_REPLY_SIZE);
+        datagramSizes = new LinkedList<>();
         setDatagramChannel(c);
+        this.connectionFactory = cf;
     }
 
+    /**
+     * 
+     * @return a linkedlist with the size and the the datagram data
+     */
+    public List<?> getNextDatagram(){
+        List l = new LinkedList<>();
+        int size = datagramSizes.remove(0);
+        l.add(size);
+        l.add(ByteBuffer.allocateDirect(size).put(datagramBuffer.array(), 0, size));
+
+        return l;
+    }
 
     private Operation getNextWritableOp() {
         Operation o = getCurrentWriteOp();
@@ -253,14 +274,39 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     }
 
     @Override
-    public void addOp(Operation op) {
-        try {
-            if (!this.inputQueue.offer(op, opQueueMaxBlockTime, TimeUnit.MILLISECONDS)) {
-                throw new IllegalStateException(
-                        "Timed out waiting to add " + op + "(max wait=" + opQueueMaxBlockTime + "ms)");
+    public void addOp(Operation op){
+        System.out.println("addOp");
+        try{
+            if (!authLatch.await(authWaitTime, TimeUnit.MILLISECONDS)) {
+                FailureMode mode = connectionFactory.getFailureMode();
+                if (mode == FailureMode.Redistribute || mode == FailureMode.Retry) {
+                /*getLogger().debug("Redistributing Operation " + op + " because auth "
+                    + "latch taken longer than " + authWaitTime + " milliseconds to "
+                    + "complete on node " + getSocketAddress());*/
+                connection.retryOperation(op);
+                } else {
+                op.cancel();
+                /*getLogger().warn("Operation canceled because authentication "
+                    + "or reconnection and authentication has "
+                    + "taken more than " + authWaitTime + " milliseconds to "
+                    + "complete on node " + this);
+                getLogger().debug("Canceled operation %s", op.toString());*/
+                }
+                return;
+            }
+
+            try {
+                if (!this.inputQueue.offer(op, opQueueMaxBlockTime, TimeUnit.MILLISECONDS)) {
+                    throw new IllegalStateException(
+                            "Timed out waiting to add " + op + "(max wait=" + opQueueMaxBlockTime + "ms)");
+                }
+            } catch (InterruptedException e) {
+                System.out.println("addOp: Error offering to inputQUeue");
             }
         } catch (InterruptedException e) {
-            System.out.println("addOp: Error offering to inputQUeue");
+            // Restore the interrupted status
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting to add " + op);
         }
     }
 
@@ -307,8 +353,8 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
     @Override
     public boolean isActive() {
-        return reconnectAttempt.get() == 0 && getChannel() != null
-        && getChannel().isConnected();
+        return getDatagramChannel() != null
+        && getDatagramChannel().isConnected();
     }
 
     @Override
@@ -328,18 +374,19 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
     @Override
     public void reconnecting() {
-        return;
+        reconnectAttempt.incrementAndGet();
+        continuousTimeout.set(0);
     }
 
     @Override
     public void connected() {
-        return;
+        reconnectAttempt.set(0);
+        continuousTimeout.set(0);
     }
 
     @Override
     public int getReconnectCount() {
-        // TODO Auto-generated method stub
-        return 0;
+        return reconnectAttempt.get();
     }
 
     public void registerDatagramChannel(DatagramChannel ch, SelectionKey skey) {
@@ -395,11 +442,6 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
         while(wbuf.hasRemaining()){
             int bytesToCopy = opsSize.remove();
             byte[] b = new byte[bytesToCopy + 8];
-            try {
-                this.datagramSocket = new DatagramSocket(3000);
-            } catch (SocketException e) {
-                System.out.println("addOp: Error creating datagramSocket");
-            }
 
             b[0] = String.valueOf(requestId / 256).getBytes()[0];
             b[1] = String.valueOf(requestId % 256).getBytes()[0];
@@ -465,12 +507,16 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
     @Override
     public void setContinuousTimeout(boolean timedOut) {
-        return;
+        if (timedOut && isActive()) {
+            continuousTimeout.incrementAndGet();
+          } else {
+            continuousTimeout.set(0);
+        }
     }
 
     @Override
     public int getContinuousTimeout() {
-        return 0;
+        return continuousTimeout.get();
     }
 
     @Override
