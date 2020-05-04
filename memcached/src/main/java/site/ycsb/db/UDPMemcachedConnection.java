@@ -296,7 +296,7 @@ public class UDPMemcachedConnection extends MemcachedConnection {
           currentOp = node.getCurrentReadOp();
         }
         rbuf.clear();
-        //read = channel.read(rbuf) - 2;
+        read = channel.read(rbuf);
         node.completedRead();
       }
    }
@@ -306,7 +306,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
           final ByteBuffer rbuf, final MemcachedNode node) throws IOException {
     currentOp.readFromBuffer(rbuf);
     if (currentOp.getState() == OperationState.COMPLETE) {
-      System.out.println("Completed read op");
       getLogger().debug("Completed read op: %s and giving the next %d "
         + "bytes", currentOp, rbuf.remaining());
       Operation op = node.removeCurrentReadOp();
@@ -386,7 +385,8 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   @Override
   public void handleIO() throws IOException {
-    System.out.println("Handle IO");
+    System.out.println("IS Shutdown active? " + shutDown);
+
     if (shutDown) {
       getLogger().debug("No IO while shut down.");
       return;
