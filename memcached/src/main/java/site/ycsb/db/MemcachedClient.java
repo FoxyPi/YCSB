@@ -18,6 +18,7 @@
 package site.ycsb.db;
 
 import site.ycsb.ByteIterator;
+import site.ycsb.Client;
 import site.ycsb.DB;
 import site.ycsb.DBException;
 import site.ycsb.Status;
@@ -65,6 +66,7 @@ public class MemcachedClient extends DB {
   private boolean checkOperationStatus;
   private long shutdownTimeoutMillis;
   private int objectExpirationTime;
+  private int threadN;
 
   public static final String HOSTS_PROPERTY = "memcached.hosts";
 
@@ -118,6 +120,7 @@ public class MemcachedClient extends DB {
   @Override
   public void init() throws DBException {
     try {
+      this.threadN = Client.getCurrentThread();
       client = createMemcachedClient();
       checkOperationStatus = Boolean.parseBoolean(
           getProperties().getProperty(CHECK_OPERATION_STATUS_PROPERTY,
@@ -136,7 +139,7 @@ public class MemcachedClient extends DB {
   protected net.spy.memcached.MemcachedClient createMemcachedClient()
       throws Exception {
     ConnectionFactoryBuilder udpConnectionFactoryBuilder =
-        new UDPConnFactoryBuilder();
+        new UDPConnFactoryBuilder(threadN);
 
     udpConnectionFactoryBuilder.setReadBufferSize(Integer.parseInt(
         getProperties().getProperty(READ_BUFFER_SIZE_PROPERTY,
@@ -185,11 +188,12 @@ public class MemcachedClient extends DB {
       GetFuture<Object> future = memcachedClient().asyncGet(key);
       Object document = future.get();
       if (document != null) {
+        System.out.println("Document != null");
         fromJson((String) document, fields, result);
       }
       return Status.OK;
     } catch (Exception e) {
-      logger.error("Error encountered for key: " + key, e);
+      System.out.println("Error encountered for key: " + key);
       return Status.ERROR;
     }
   }
@@ -223,7 +227,6 @@ public class MemcachedClient extends DB {
       
       OperationFuture<Boolean> future =
           memcachedClient().add(key, objectExpirationTime, toJson(values));
-      System.out.println("Returning");
       return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error inserting value", e);

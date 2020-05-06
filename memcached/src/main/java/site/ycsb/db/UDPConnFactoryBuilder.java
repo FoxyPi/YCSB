@@ -22,13 +22,16 @@ import net.spy.memcached.ops.Operation;
 import net.spy.memcached.transcoders.Transcoder;
 
 public class UDPConnFactoryBuilder extends ConnectionFactoryBuilder{
-    public UDPConnFactoryBuilder(){
+    private int thisThreadN;  
+
+    public UDPConnFactoryBuilder(int threadN){
         super();
+        thisThreadN = threadN;
     }
 
     @Override
     public ConnectionFactory build() {
-        return new UDPDefaultConnFactory() {
+        return new UDPDefaultConnFactory(thisThreadN) {
 
             @Override
             public BlockingQueue<Operation> createOperationQueue() {

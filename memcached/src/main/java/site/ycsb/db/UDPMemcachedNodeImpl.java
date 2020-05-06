@@ -275,7 +275,6 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
     @Override
     public void addOp(Operation op){
-        System.out.println("addOp");
         try{
             if (!authLatch.await(authWaitTime, TimeUnit.MILLISECONDS)) {
                 FailureMode mode = connectionFactory.getFailureMode();
@@ -454,8 +453,6 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
             requestId++;
             getWbuf().get(b, 8, bytesToCopy);
-
-            System.out.println(new String(b));
 
             channel.write(ByteBuffer.wrap(b));
 

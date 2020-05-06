@@ -1,6 +1,7 @@
 package site.ycsb.db;
 
 import java.io.IOException;
+import java.net.BindException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -79,12 +80,14 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   private final SortedMap<Long, MemcachedNode> reconnectQueue;
 
-
+  private static int thisThreadN;
+  
   public UDPMemcachedConnection(final int bufSize, final ConnectionFactory f, final List<InetSocketAddress> a,
-      final Collection<ConnectionObserver> obs, final FailureMode fm, final OperationFactory opfactory)
-      throws IOException {
-
-    super(bufSize, getConnectionFactory(f), a, initializeObservers(obs), fm, opfactory);
+  final Collection<ConnectionObserver> obs, final FailureMode fm, final OperationFactory opfactory, int threadN)
+  throws IOException {
+    
+    super(bufSize, getConnectionFactory(f,threadN), a, initializeObservers(obs), fm, opfactory);
+    System.out.println("UDPMemcachedConnection: " + thisThreadN);
     retryOps = Collections.synchronizedList(new ArrayList<Operation>());
     this.opFact = opfactory;
     this.bufSize = bufSize;
@@ -101,6 +104,7 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     maxDelay = TimeUnit.SECONDS.toMillis(f.getMaxReconnectDelay()); 
     
     reconnectQueue = new TreeMap<Long, MemcachedNode>();
+
   }
 
   private void handleReadsAndWrites(final SelectionKey sk,
@@ -121,8 +125,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     int rt = node.getReconnectCount();
     node.connected();
 
-    System.out.println("ConnObservers: " + connObservers);
-
     for (ConnectionObserver observer : connObservers) {
       observer.connectionEstablished(node.getSocketAddress(), rt);
     }
@@ -130,11 +132,22 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   @Override
   protected List<MemcachedNode> createConnections(final Collection<InetSocketAddress> addrs) throws IOException {
-        List<MemcachedNode> connections = new ArrayList<MemcachedNode>(addrs.size());
+    
+    List<MemcachedNode> connections = new ArrayList<MemcachedNode>(addrs.size());
         
     for (SocketAddress sa : addrs) {
       DatagramChannel ch = DatagramChannel.open();
-      ch.bind(new InetSocketAddress("127.0.0.1", 3000));
+      boolean binded = false;
+
+      while(!binded){
+        thisThreadN += (int)Math.floor(Math.random()*100);
+        try{
+          ch.bind(new InetSocketAddress("127.0.0.1", 3000 + thisThreadN));
+          binded = true;
+        }catch(BindException e){
+        }
+      }
+
       ch.configureBlocking(false);
       MemcachedNode qa = ((UDPDefaultConnFactory)connectionFactory).createMemcachedNode(sa, ch, bufSize);
       qa.setConnection(this);
@@ -170,8 +183,9 @@ public class UDPMemcachedConnection extends MemcachedConnection {
       return obs;
   }
 
-  private static final ConnectionFactory getConnectionFactory(ConnectionFactory f){
+  private static final ConnectionFactory getConnectionFactory(ConnectionFactory f, int threadN){
       connectionFactory = f;
+      thisThreadN = threadN;
       return f;
   }
 
@@ -179,7 +193,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
   protected void addOperation(String key, Operation o) {
       MemcachedNode placeIn = null;
       MemcachedNode primary = locator.getPrimary(key);
-      System.out.println("Is primary active? " + primary.isActive());
 
       if (primary.isActive() || failureMode == FailureMode.Retry) {
         placeIn = primary;
@@ -243,31 +256,54 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     }
   }
 
+  private int readPrecedingBytes(byte[] b, int initIndex){
+      int i = 0;
+      while(b[initIndex + i] >= '0' && b[initIndex + i] <= '9') i++;
+
+      return i;
+  }
+
   private void handleReads(final MemcachedNode node) throws IOException {
-    System.out.println("READ DO UDPMEMCACHEDCONNECTION");
     Operation currentOp = node.getCurrentReadOp();
-    System.out.println("currentOp: " + currentOp);
     if (currentOp instanceof TapAckOperationImpl) {
       node.removeCurrentReadOp();
       return;
     }
-
+    
     DatagramChannel channel = ((UDPMemcachedNodeImpl)node).getDatagramChannel();
     ByteBuffer datagramBuffer = ByteBuffer.allocateDirect(65536);
 
     if(channel.receive(datagramBuffer) != null){
       ByteBuffer rbuf = node.getRbuf();
       datagramBuffer.flip();
-      datagramBuffer.position(8);
+      //datagramBuffer.position(8);
       int read = datagramBuffer.remaining();
-
-      rbuf.put(datagramBuffer);
-
-      rbuf.flip();
       byte[] b = new byte[read];
-      rbuf.get(b);
+      datagramBuffer.get(b);
+      String[] tokens = new String(b).split("\r\n");
+      int ntokens = tokens.length;
+      int lastbyte = 0;
 
-      System.out.println("Received: " + new String(b) + " Read: " + read);
+      datagramBuffer.flip();
+
+      if(ntokens > 1){
+        rbuf.put(b, 0, tokens[0].length() + 2);
+        for(int i = 1; i < ntokens; i++){
+          lastbyte += tokens[i-1].length() + 2;
+          int precedingBytes = readPrecedingBytes(b, lastbyte);
+          rbuf.put(b, lastbyte + precedingBytes, tokens[i].length() + 2 - precedingBytes);
+          read -= precedingBytes;
+        }
+      }
+      else{
+        datagramBuffer.position(8);
+        read -= 8;
+        rbuf.put(datagramBuffer);
+      }
+
+      b = new byte[read];
+      rbuf.flip();
+      rbuf.get(b);
 
       metrics.updateHistogram(OVERALL_AVG_BYTES_READ_METRIC, read);
 
@@ -279,7 +315,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
         getLogger().debug("Read %d bytes", read);
         rbuf.flip();
         while (rbuf.remaining() > 0) {
-          System.out.println("rbuf.remaining() > 0");
           if (currentOp == null) {
             throw new IllegalStateException("No read operation.");
           }
@@ -318,7 +353,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
         metrics.markMeter(OVERALL_RESPONSE_SUCC_METRIC);
       }
     } else if (currentOp.getState() == OperationState.RETRY) {
-      System.out.println("Retrying op");
       handleRetryInformation(currentOp.getErrorMsg());
       getLogger().debug("Reschedule read op due to NOT_MY_VBUCKET error: "
         + "%s ", currentOp);
@@ -346,7 +380,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   private void handleInputQueue() {
     if (!addedQueue.isEmpty()) {
-      System.out.println("HandleInputQueue");
       getLogger().debug("Handling queue");
       Collection<MemcachedNode> toAdd = new HashSet<MemcachedNode>();
       Collection<MemcachedNode> todo = new HashSet<MemcachedNode>();
@@ -385,7 +418,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   @Override
   public void handleIO() throws IOException {
-    System.out.println("IS Shutdown active? " + shutDown);
 
     if (shutDown) {
       getLogger().debug("No IO while shut down.");

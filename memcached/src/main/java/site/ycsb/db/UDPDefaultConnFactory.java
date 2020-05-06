@@ -13,15 +13,16 @@ import net.spy.memcached.MemcachedConnection;
 import net.spy.memcached.MemcachedNode;
 
 public class UDPDefaultConnFactory extends DefaultConnectionFactory {
-    public UDPDefaultConnFactory() {
+    private int thisThreadN;
+    public UDPDefaultConnFactory(int threadN) {
         super();
+        this.thisThreadN = threadN;
     }
 
     @Override
     public MemcachedConnection createConnection(List<InetSocketAddress> addrs) throws IOException {
-        
         return new UDPMemcachedConnection(getReadBufSize(), this, addrs, getInitialObservers(), getFailureMode(),
-                getOperationFactory());
+                getOperationFactory(), thisThreadN);
     }
 
     public MemcachedNode createMemcachedNode(SocketAddress sa, DatagramChannel c, int bufSize) {

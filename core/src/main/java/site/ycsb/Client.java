@@ -166,6 +166,8 @@ public final class Client {
   private static final String CLIENT_CLEANUP_SPAN = "Client#cleanup";
   private static final String CLIENT_EXPORT_MEASUREMENTS_SPAN = "Client#export_measurements";
 
+  public static Integer currentThread;
+
   public static void usageMessage() {
     System.out.println("Usage: java site.ycsb.Client [options]");
     System.out.println("Options:");
@@ -273,9 +275,16 @@ public final class Client {
     }
   }
 
+  public static Integer getCurrentThread(){
+    synchronized(currentThread){
+      return currentThread;
+    }
+  }
+
   @SuppressWarnings("unchecked")
   public static void main(String[] args) {
     Properties props = parseArguments(args);
+    currentThread = new Integer(0);
 
     boolean status = Boolean.valueOf(props.getProperty(STATUS_PROPERTY, String.valueOf(false)));
     String label = props.getProperty(LABEL_PROPERTY, "");
@@ -335,11 +344,14 @@ public final class Client {
       for (ClientThread client : clients) {
         threads.put(new Thread(tracer.wrap(client, "ClientThread")), client);
       }
-
+      
       st = System.currentTimeMillis();
-
+      
       for (Thread t : threads.keySet()) {
         t.start();
+        synchronized(currentThread){
+          currentThread++;
+        }
       }
 
       if (maxExecutionTime > 0) {
@@ -431,16 +443,17 @@ public final class Client {
           initFailed = true;
           break;
         }
-
+        
         int threadopcount = opcount / threadcount;
-
+        
         // ensure correct number of operations, in case opcount is not a multiple of threadcount
         if (threadid < opcount % threadcount) {
           ++threadopcount;
         }
 
+
         ClientThread t = new ClientThread(db, dotransactions, workload, props, threadopcount, targetperthreadperms,
-            completeLatch);
+        completeLatch);
         t.setThreadId(threadid);
         t.setThreadCount(threadcount);
         clients.add(t);
