@@ -136,7 +136,7 @@ public class MemcachedClient extends DB {
   protected net.spy.memcached.MemcachedClient createMemcachedClient()
       throws Exception {
     ConnectionFactoryBuilder udpConnectionFactoryBuilder =
-        new UDPConnFactoryBuilder();
+        new ConnectionFactoryBuilder();
 
     udpConnectionFactoryBuilder.setReadBufferSize(Integer.parseInt(
         getProperties().getProperty(READ_BUFFER_SIZE_PROPERTY,
@@ -185,7 +185,7 @@ public class MemcachedClient extends DB {
       GetFuture<Object> future = memcachedClient().asyncGet(key);
       Object document = future.get();
       if (document != null) {
-        fromJson((String) document, fields, result);
+        fromJson(((String) document).substring(10), fields, result);
       }
       return Status.OK;
     } catch (Exception e) {
