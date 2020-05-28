@@ -34,7 +34,6 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
     private static final int MAX_REPLY_SIZE = 65536;
 
-
     private SocketAddress socketAddress;
     private DatagramSocket datagramSocket;
     private String ip;
@@ -64,9 +63,9 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
     private short requestId;
 
-    public UDPMemcachedNodeImpl(SocketAddress sa, DatagramChannel c, int bufSize, BlockingQueue<Operation> rq, 
-                BlockingQueue<Operation> wq, BlockingQueue<Operation> iq, 
-                long opQueueMaxBlockTime, long dt, long authWaitTime, ConnectionFactory cf) throws SocketException {
+    public UDPMemcachedNodeImpl(SocketAddress sa, DatagramChannel c, int bufSize, BlockingQueue<Operation> rq,
+            BlockingQueue<Operation> wq, BlockingQueue<Operation> iq, long opQueueMaxBlockTime, long dt,
+            long authWaitTime, ConnectionFactory cf) throws SocketException {
 
         this.socketAddress = sa;
 
@@ -96,7 +95,7 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
      * 
      * @return a linkedlist with the size and the the datagram data
      */
-    public List<?> getNextDatagram(){
+    public List<?> getNextDatagram() {
         List l = new LinkedList<>();
         int size = datagramSizes.remove(0);
         l.add(size);
@@ -108,24 +107,24 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     private Operation getNextWritableOp() {
         Operation o = getCurrentWriteOp();
         while (o != null && o.getState() == OperationState.WRITE_QUEUED) {
-          synchronized(o) {
-            if (o.isCancelled()) {
-              //getLogger().debug("Not writing cancelled op.");
-              Operation cancelledOp = removeCurrentWriteOp();
-              assert o == cancelledOp;
-            } else if (o.isTimedOut(defaultOpTimeout)) {
-              //getLogger().debug("Not writing timed out op.");
-              Operation timedOutOp = removeCurrentWriteOp();
-              assert o == timedOutOp;
-            } else {
-              o.writing();
-              if (!(o instanceof TapAckOperationImpl)) {
-                readQ.add(o);
-              }
-              return o;
+            synchronized (o) {
+                if (o.isCancelled()) {
+                    // getLogger().debug("Not writing cancelled op.");
+                    Operation cancelledOp = removeCurrentWriteOp();
+                    assert o == cancelledOp;
+                } else if (o.isTimedOut(defaultOpTimeout)) {
+                    // getLogger().debug("Not writing timed out op.");
+                    Operation timedOutOp = removeCurrentWriteOp();
+                    assert o == timedOutOp;
+                } else {
+                    o.writing();
+                    if (!(o instanceof TapAckOperationImpl)) {
+                        readQ.add(o);
+                    }
+                    return o;
+                }
+                o = getCurrentWriteOp();
             }
-            o = getCurrentWriteOp();
-          }
         }
         return o;
     }
@@ -133,13 +132,13 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     private boolean preparePending() {
         // Copy the input queue into the write queue.
         copyInputQueue();
-    
+
         // Now check the ops
         Operation nextOp = getCurrentWriteOp();
         while (nextOp != null && nextOp.isCancelled()) {
-          //getLogger().info("Removing cancelled operation: %s", nextOp);
-          removeCurrentWriteOp();
-          nextOp = getCurrentWriteOp();
+            // getLogger().info("Removing cancelled operation: %s", nextOp);
+            removeCurrentWriteOp();
+            nextOp = getCurrentWriteOp();
         }
         return nextOp != null;
     }
@@ -172,7 +171,7 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
             if (buf != null) {
                 buf.reset();
             } else {
-                //getLogger().info("No buffer for current write op, removing");
+                // getLogger().info("No buffer for current write op, removing");
                 removeCurrentWriteOp();
             }
         }
@@ -181,14 +180,14 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
         while (hasReadOp()) {
             op = removeCurrentReadOp();
             if (op != getCurrentWriteOp()) {
-                //getLogger().warn("Discarding partially completed op: %s", op);
+                // getLogger().warn("Discarding partially completed op: %s", op);
                 op.cancel();
             }
         }
 
         while (shouldAuth && hasWriteOp()) {
             op = removeCurrentWriteOp();
-           //  getLogger().warn("Discarding partially completed op: %s", op);
+            // getLogger().warn("Discarding partially completed op: %s", op);
             op.cancel();
         }
 
@@ -201,36 +200,36 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     public void fillWriteBuffer(boolean optimizeGets) {
         if (toWrite == 0 && readQ.remainingCapacity() > 0) {
             getWbuf().clear();
-            Operation o=getNextWritableOp();
+            Operation o = getNextWritableOp();
 
-            while(o != null && toWrite < getWbuf().capacity()) {
-                synchronized(o) {
-                assert o.getState() == OperationState.WRITING;
-        
-                ByteBuffer obuf = o.getBuffer();
-                assert obuf != null : "Didn't get a write buffer from " + o;
-                int bytesToCopy = Math.min(getWbuf().remaining(), obuf.remaining());
-                byte[] b = new byte[bytesToCopy];
-                obuf.get(b);
-                getWbuf().put(b);
-                opsSize.add(bytesToCopy);
-                //getLogger().debug("After copying stuff from %s: %s", o, getWbuf());
-                if (!o.getBuffer().hasRemaining()) {
-                    o.writeComplete();
-                    transitionWriteItem();
-        
-                    preparePending();
-        
-                    o=getNextWritableOp();
-                }
-                toWrite += bytesToCopy;
+            while (o != null && toWrite < getWbuf().capacity()) {
+                synchronized (o) {
+                    assert o.getState() == OperationState.WRITING;
+
+                    ByteBuffer obuf = o.getBuffer();
+                    assert obuf != null : "Didn't get a write buffer from " + o;
+                    int bytesToCopy = Math.min(getWbuf().remaining(), obuf.remaining());
+                    byte[] b = new byte[bytesToCopy];
+                    obuf.get(b);
+                    getWbuf().put(b);
+                    opsSize.add(bytesToCopy);
+                    // getLogger().debug("After copying stuff from %s: %s", o, getWbuf());
+                    if (!o.getBuffer().hasRemaining()) {
+                        o.writeComplete();
+                        transitionWriteItem();
+
+                        preparePending();
+
+                        o = getNextWritableOp();
+                    }
+                    toWrite += bytesToCopy;
                 }
             }
+
             getWbuf().flip();
-            assert toWrite <= getWbuf().capacity() : "toWrite exceeded capacity: "
-                + this;
-            assert toWrite == getWbuf().remaining() : "Expected " + toWrite
-                + " remaining, got " + getWbuf().remaining();
+            assert toWrite <= getWbuf().capacity() : "toWrite exceeded capacity: " + this;
+            assert toWrite == getWbuf().remaining() : "Expected " + toWrite + " remaining, got "
+                    + getWbuf().remaining();
         } else {
             System.out.println("Buffer is full, skipping");
         }
@@ -240,7 +239,7 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     public void transitionWriteItem() {
         Operation op = removeCurrentWriteOp();
         assert op != null : "There is no write item to transition";
-        //getLogger().debug("Finished writing %s", op);
+        // getLogger().debug("Finished writing %s", op);
     }
 
     @Override
@@ -255,7 +254,7 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
     @Override
     public Operation getCurrentWriteOp() {
-       return writeQ.peek();
+        return writeQ.peek();
     }
 
     @Override
@@ -274,22 +273,25 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     }
 
     @Override
-    public void addOp(Operation op){
-        try{
+    public void addOp(Operation op) {
+        try {
             if (!authLatch.await(authWaitTime, TimeUnit.MILLISECONDS)) {
                 FailureMode mode = connectionFactory.getFailureMode();
                 if (mode == FailureMode.Redistribute || mode == FailureMode.Retry) {
-                /*getLogger().debug("Redistributing Operation " + op + " because auth "
-                    + "latch taken longer than " + authWaitTime + " milliseconds to "
-                    + "complete on node " + getSocketAddress());*/
-                connection.retryOperation(op);
+                    /*
+                     * getLogger().debug("Redistributing Operation " + op + " because auth " +
+                     * "latch taken longer than " + authWaitTime + " milliseconds to " +
+                     * "complete on node " + getSocketAddress());
+                     */
+                    connection.retryOperation(op);
                 } else {
-                op.cancel();
-                /*getLogger().warn("Operation canceled because authentication "
-                    + "or reconnection and authentication has "
-                    + "taken more than " + authWaitTime + " milliseconds to "
-                    + "complete on node " + this);
-                getLogger().debug("Canceled operation %s", op.toString());*/
+                    op.cancel();
+                    /*
+                     * getLogger().warn("Operation canceled because authentication " +
+                     * "or reconnection and authentication has " + "taken more than " + authWaitTime
+                     * + " milliseconds to " + "complete on node " + this);
+                     * getLogger().debug("Canceled operation %s", op.toString());
+                     */
                 }
                 return;
             }
@@ -320,18 +322,18 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     @Override
     public int getSelectionOps() {
         int rv = 0;
-        
+
         if (getDatagramChannel().isConnected()) {
             if (hasReadOp()) {
-              rv |= SelectionKey.OP_READ;
+                rv |= SelectionKey.OP_READ;
             }
             if (toWrite > 0 || hasWriteOp()) {
-              rv |= SelectionKey.OP_WRITE;
+                rv |= SelectionKey.OP_WRITE;
             }
         } else {
             rv = SelectionKey.OP_CONNECT;
         }
-        
+
         return rv;
     }
 
@@ -352,8 +354,7 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
 
     @Override
     public boolean isActive() {
-        return getDatagramChannel() != null
-        && getDatagramChannel().isConnected();
+        return getDatagramChannel() != null && getDatagramChannel().isConnected();
     }
 
     @Override
@@ -399,13 +400,12 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
         setSk(skey);
     }
 
-    public void setDatagramChannel(DatagramChannel to){
-        assert channel == null || !channel.isOpen()
-      : "Attempting to overwrite channel";
+    public void setDatagramChannel(DatagramChannel to) {
+        assert channel == null || !channel.isOpen() : "Attempting to overwrite channel";
         channel = to;
     }
 
-    public DatagramChannel getDatagramChannel(){
+    public DatagramChannel getDatagramChannel() {
         return channel;
     }
 
@@ -437,9 +437,10 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
     @Override
     public int writeSome() throws IOException {
         int wrote = 0;
-
-        while(wbuf.hasRemaining()){
+        requestId++;
+        while (wbuf.hasRemaining()) {
             int bytesToCopy = opsSize.remove();
+
             byte[] b = new byte[bytesToCopy + 8];
 
             b[0] = String.valueOf(requestId / 256).getBytes()[0];
@@ -450,10 +451,8 @@ public class UDPMemcachedNodeImpl implements MemcachedNode {
             b[5] = '1';
             b[6] = '0';
             b[7] = '0';
-
-            requestId++;
+            
             getWbuf().get(b, 8, bytesToCopy);
-
             channel.write(ByteBuffer.wrap(b));
 
             wrote += bytesToCopy;

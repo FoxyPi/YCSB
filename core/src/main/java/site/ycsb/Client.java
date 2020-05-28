@@ -32,6 +32,7 @@ import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Turn seconds remaining into more useful units.
@@ -166,8 +167,6 @@ public final class Client {
   private static final String CLIENT_CLEANUP_SPAN = "Client#cleanup";
   private static final String CLIENT_EXPORT_MEASUREMENTS_SPAN = "Client#export_measurements";
 
-  public static Integer currentThread;
-
   public static void usageMessage() {
     System.out.println("Usage: java site.ycsb.Client [options]");
     System.out.println("Options:");
@@ -275,16 +274,10 @@ public final class Client {
     }
   }
 
-  public static Integer getCurrentThread(){
-    synchronized(currentThread){
-      return currentThread;
-    }
-  }
+  public static int threadcount;
 
-  @SuppressWarnings("unchecked")
   public static void main(String[] args) {
     Properties props = parseArguments(args);
-    currentThread = new Integer(0);
 
     boolean status = Boolean.valueOf(props.getProperty(STATUS_PROPERTY, String.valueOf(false)));
     String label = props.getProperty(LABEL_PROPERTY, "");
@@ -292,7 +285,7 @@ public final class Client {
     long maxExecutionTime = Integer.parseInt(props.getProperty(MAX_EXECUTION_TIME, "0"));
 
     //get number of threads, target and db
-    int threadcount = Integer.parseInt(props.getProperty(THREAD_COUNT_PROPERTY, "1"));
+    threadcount = Integer.parseInt(props.getProperty(THREAD_COUNT_PROPERTY, "1"));
     String dbname = props.getProperty(DB_PROPERTY, "site.ycsb.BasicDB");
     int target = Integer.parseInt(props.getProperty(TARGET_PROPERTY, "0"));
 
@@ -349,9 +342,6 @@ public final class Client {
       
       for (Thread t : threads.keySet()) {
         t.start();
-        synchronized(currentThread){
-          currentThread++;
-        }
       }
 
       if (maxExecutionTime > 0) {

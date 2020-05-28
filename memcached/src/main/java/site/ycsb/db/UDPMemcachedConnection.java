@@ -19,6 +19,7 @@ import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -54,17 +55,13 @@ public class UDPMemcachedConnection extends MemcachedConnection {
   private static final String OVERALL_AVG_BYTES_WRITE_METRIC = "[MEM] Average Bytes written to OS per write";
   private static final int DOUBLE_CHECK_EMPTY = 256;
   private static final int EXCESSIVE_EMPTY = 0x1000000;
-  private static final String OVERALL_RESPONSE_RETRY_METRIC =
-    "[MEM] Response Rate: Retry";
-  private static final String SHUTD_QUEUE_METRIC =
-    "[MEM] Shutting Down Nodes (NodesToShutdown)";
-  private static final String RECON_QUEUE_METRIC =
-    "[MEM] Reconnecting Nodes (ReconnectQueue)";
+  private static final String OVERALL_RESPONSE_RETRY_METRIC = "[MEM] Response Rate: Retry";
+  private static final String SHUTD_QUEUE_METRIC = "[MEM] Shutting Down Nodes (NodesToShutdown)";
+  private static final String RECON_QUEUE_METRIC = "[MEM] Reconnecting Nodes (ReconnectQueue)";
 
   private static ConnectionFactory connectionFactory;
   private static int bufSize;
-  private static final Collection<ConnectionObserver> connObservers =
-    new ConcurrentLinkedQueue<ConnectionObserver>();
+  private static final Collection<ConnectionObserver> connObservers = new ConcurrentLinkedQueue<ConnectionObserver>();
 
   private int emptySelects = 0;
 
@@ -80,35 +77,31 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   private final SortedMap<Long, MemcachedNode> reconnectQueue;
 
-  private static int thisThreadN;
-  
   public UDPMemcachedConnection(final int bufSize, final ConnectionFactory f, final List<InetSocketAddress> a,
-  final Collection<ConnectionObserver> obs, final FailureMode fm, final OperationFactory opfactory, int threadN)
-  throws IOException {
-    
-    super(bufSize, getConnectionFactory(f,threadN), a, initializeObservers(obs), fm, opfactory);
-    System.out.println("UDPMemcachedConnection: " + thisThreadN);
+      final Collection<ConnectionObserver> obs, final FailureMode fm, final OperationFactory opfactory)
+      throws IOException {
+
+    super(bufSize, getConnectionFactory(f), a, initializeObservers(obs), fm, opfactory);
     retryOps = Collections.synchronizedList(new ArrayList<Operation>());
     this.opFact = opfactory;
     this.bufSize = bufSize;
 
     String verifyAlive = System.getProperty("net.spy.verifyAliveOnConnect");
-    if(verifyAlive != null && verifyAlive.equals("true")) {
+    if (verifyAlive != null && verifyAlive.equals("true")) {
       verifyAliveOnConnect = true;
     } else {
       verifyAliveOnConnect = false;
     }
 
     listenerExecutorService = f.getListenerExecutorService();
-  
-    maxDelay = TimeUnit.SECONDS.toMillis(f.getMaxReconnectDelay()); 
-    
+
+    maxDelay = TimeUnit.SECONDS.toMillis(f.getMaxReconnectDelay());
+
     reconnectQueue = new TreeMap<Long, MemcachedNode>();
 
   }
 
-  private void handleReadsAndWrites(final SelectionKey sk,
-          final MemcachedNode node) throws IOException {
+  private void handleReadsAndWrites(final SelectionKey sk, final MemcachedNode node) throws IOException {
     if (sk.isValid()) {
       if (sk.isReadable()) {
         handleReads(node);
@@ -119,9 +112,8 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     }
   }
 
-
   private void connected(final MemcachedNode node) {
-    assert ((UDPMemcachedNodeImpl)node).getDatagramChannel().isConnected() : "Not connected.";
+    assert ((UDPMemcachedNodeImpl) node).getDatagramChannel().isConnected() : "Not connected.";
     int rt = node.getReconnectCount();
     node.connected();
 
@@ -132,95 +124,90 @@ public class UDPMemcachedConnection extends MemcachedConnection {
 
   @Override
   protected List<MemcachedNode> createConnections(final Collection<InetSocketAddress> addrs) throws IOException {
-    
+
     List<MemcachedNode> connections = new ArrayList<MemcachedNode>(addrs.size());
-        
-    for (SocketAddress sa : addrs) {
+
+    for (InetSocketAddress sa : addrs) {
       DatagramChannel ch = DatagramChannel.open();
       boolean binded = false;
 
-      while(!binded){
-        thisThreadN += (int)Math.floor(Math.random()*100);
-        try{
-          ch.bind(new InetSocketAddress("127.0.0.1", 3000 + thisThreadN));
+      while (!binded) {
+        try {
+          ch.bind(null);
           binded = true;
-        }catch(BindException e){
+        } catch (BindException e) {
         }
       }
 
       ch.configureBlocking(false);
-      MemcachedNode qa = ((UDPDefaultConnFactory)connectionFactory).createMemcachedNode(sa, ch, bufSize);
+      MemcachedNode qa = ((UDPDefaultConnFactory) connectionFactory).createMemcachedNode(sa, ch, bufSize);
       qa.setConnection(this);
       int ops = 0;
-      
-      try{
+
+      try {
         ch.connect(sa);
-        if(ch.isConnected()){
+        if (ch.isConnected()) {
           connected(qa);
-        } else{
+        } else {
           ops = SelectionKey.OP_CONNECT;
         }
 
         selector.wakeup();
-        qa.setSk(ch.register(selector,ops,qa));
-        
+        qa.setSk(ch.register(selector, ops, qa));
+
         assert ch.isConnected()
-            || qa.getSk().interestOps() == SelectionKey.OP_CONNECT
-            : "Not connected, and not wanting to connect";
-      } catch (SocketException e){
+            || qa.getSk().interestOps() == SelectionKey.OP_CONNECT : "Not connected, and not wanting to connect";
+      } catch (SocketException e) {
         queueReconnect(qa);
       }
 
       connections.add(qa);
-    };
-  
+    }
+    ;
+
     return connections;
   }
 
-  private static final Collection<ConnectionObserver> 
-    initializeObservers(Collection<ConnectionObserver> obs){
-      connObservers.addAll(obs);
-      return obs;
+  private static final Collection<ConnectionObserver> initializeObservers(Collection<ConnectionObserver> obs) {
+    connObservers.addAll(obs);
+    return obs;
   }
 
-  private static final ConnectionFactory getConnectionFactory(ConnectionFactory f, int threadN){
-      connectionFactory = f;
-      thisThreadN = threadN;
-      return f;
+  private static final ConnectionFactory getConnectionFactory(ConnectionFactory f) {
+    connectionFactory = f;
+    return f;
   }
 
   @Override
   protected void addOperation(String key, Operation o) {
-      MemcachedNode placeIn = null;
-      MemcachedNode primary = locator.getPrimary(key);
+    MemcachedNode placeIn = null;
+    MemcachedNode primary = locator.getPrimary(key);
 
-      if (primary.isActive() || failureMode == FailureMode.Retry) {
+    if (primary.isActive() || failureMode == FailureMode.Retry) {
+      placeIn = primary;
+    } else if (failureMode == FailureMode.Cancel) {
+      o.cancel();
+    } else {
+      Iterator<MemcachedNode> i = locator.getSequence(key);
+      while (placeIn == null && i.hasNext()) {
+        MemcachedNode n = i.next();
+        if (n.isActive()) {
+          placeIn = n;
+        }
+      }
+
+      if (placeIn == null) {
         placeIn = primary;
-      } else if (failureMode == FailureMode.Cancel) {
-        o.cancel();
-      } else {
-        Iterator<MemcachedNode> i = locator.getSequence(key);
-        while (placeIn == null && i.hasNext()) {
-          MemcachedNode n = i.next();
-          if (n.isActive()) {
-            placeIn = n;
-          }
-        }
-
-        if (placeIn == null) {
-          placeIn = primary;
-          this.getLogger().warn("Could not redistribute to another node, "
-            + "retrying primary node for %s.", key);
-        }
+        this.getLogger().warn("Could not redistribute to another node, " + "retrying primary node for %s.", key);
       }
+    }
 
-      assert o.isCancelled() || placeIn != null : "No node found for key " + key;
-      if (placeIn != null) {
-        addOperation(placeIn, o);
-      } else {
-        assert o.isCancelled() : "No node found for " + key + " (and not "
-          + "immediately cancelled)";
-      }
+    assert o.isCancelled() || placeIn != null : "No node found for key " + key;
+    if (placeIn != null) {
+      addOperation(placeIn, o);
+    } else {
+      assert o.isCancelled() : "No node found for " + key + " (and not " + "immediately cancelled)";
+    }
   }
 
   @Override
@@ -240,14 +227,13 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     getLogger().debug("Added %s to %s", o, node);
   }
 
-  private Operation handleReadsWhenChannelEndOfStream(final Operation currentOp,
-    final MemcachedNode node, final ByteBuffer rbuf) throws IOException {
+  private Operation handleReadsWhenChannelEndOfStream(final Operation currentOp, final MemcachedNode node,
+      final ByteBuffer rbuf) throws IOException {
     if (currentOp instanceof TapOperation) {
       currentOp.getCallback().complete();
       ((TapOperation) currentOp).streamClosed(OperationState.COMPLETE);
 
-      getLogger().debug("Completed read op: %s and giving the next %d bytes",
-        currentOp, rbuf.remaining());
+      getLogger().debug("Completed read op: %s and giving the next %d bytes", currentOp, rbuf.remaining());
       Operation op = node.removeCurrentReadOp();
       assert op == currentOp : "Expected to pop " + currentOp + " got " + op;
       return node.getCurrentReadOp();
@@ -256,11 +242,12 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     }
   }
 
-  private int readPrecedingBytes(byte[] b, int initIndex){
-      int i = 0;
-      while(b[initIndex + i] >= '0' && b[initIndex + i] <= '9') i++;
+  private int readPrecedingBytes(byte[] b, int initIndex) {
+    int i = 0;
+    while (b[initIndex + i] >= '0' && b[initIndex + i] <= '9')
+      i++;
 
-      return i;
+    return i;
   }
 
   private void handleReads(final MemcachedNode node) throws IOException {
@@ -269,41 +256,29 @@ public class UDPMemcachedConnection extends MemcachedConnection {
       node.removeCurrentReadOp();
       return;
     }
-    
-    DatagramChannel channel = ((UDPMemcachedNodeImpl)node).getDatagramChannel();
+
+    DatagramChannel channel = ((UDPMemcachedNodeImpl) node).getDatagramChannel();
     ByteBuffer datagramBuffer = ByteBuffer.allocateDirect(65536);
 
-    if(channel.receive(datagramBuffer) != null){
+    if (channel.receive(datagramBuffer) != null) {
       ByteBuffer rbuf = node.getRbuf();
       datagramBuffer.flip();
-      //datagramBuffer.position(8);
+      datagramBuffer.position(8);
       int read = datagramBuffer.remaining();
-      byte[] b = new byte[read];
-      datagramBuffer.get(b);
-      String[] tokens = new String(b).split("\r\n");
-      int ntokens = tokens.length;
-      int lastbyte = 0;
+      /*
+       * byte[] b = new byte[read]; datagramBuffer.get(b); String[] tokens = new
+       * String(b).split("\r\n"); int ntokens = tokens.length; int lastbyte = 0;
+       * 
+       * datagramBuffer.flip();
+       * 
+       * if(ntokens > 1){ rbuf.put(b, 0, tokens[0].length() + 2); for(int i = 1; i <
+       * ntokens; i++){ lastbyte += tokens[i-1].length() + 2; int precedingBytes =
+       * readPrecedingBytes(b, lastbyte); rbuf.put(b, lastbyte + precedingBytes,
+       * tokens[i].length() + 2 - precedingBytes); read -= precedingBytes; } } else{
+       * datagramBuffer.position(8); read -= 8; rbuf.put(datagramBuffer); }
+       */
 
-      datagramBuffer.flip();
-
-      if(ntokens > 1){
-        rbuf.put(b, 0, tokens[0].length() + 2);
-        for(int i = 1; i < ntokens; i++){
-          lastbyte += tokens[i-1].length() + 2;
-          int precedingBytes = readPrecedingBytes(b, lastbyte);
-          rbuf.put(b, lastbyte + precedingBytes, tokens[i].length() + 2 - precedingBytes);
-          read -= precedingBytes;
-        }
-      }
-      else{
-        datagramBuffer.position(8);
-        read -= 8;
-        rbuf.put(datagramBuffer);
-      }
-
-      b = new byte[read];
-      rbuf.flip();
-      rbuf.get(b);
+      rbuf.put(datagramBuffer);
 
       metrics.updateHistogram(OVERALL_AVG_BYTES_READ_METRIC, read);
 
@@ -319,12 +294,10 @@ public class UDPMemcachedConnection extends MemcachedConnection {
             throw new IllegalStateException("No read operation.");
           }
 
-          long timeOnWire =
-            System.nanoTime() - currentOp.getWriteCompleteTimestamp();
-          metrics.updateHistogram(OVERALL_AVG_TIME_ON_WIRE_METRIC,
-            (int)(timeOnWire / 1000));
+          long timeOnWire = System.nanoTime() - currentOp.getWriteCompleteTimestamp();
+          metrics.updateHistogram(OVERALL_AVG_TIME_ON_WIRE_METRIC, (int) (timeOnWire / 1000));
           metrics.markMeter(OVERALL_RESPONSE_METRIC);
-          synchronized(currentOp) {
+          synchronized (currentOp) {
             readBufferAndLogMetrics(currentOp, rbuf, node);
           }
 
@@ -334,18 +307,16 @@ public class UDPMemcachedConnection extends MemcachedConnection {
         read = channel.read(rbuf);
         node.completedRead();
       }
-   }
+    }
   }
 
-  private void readBufferAndLogMetrics(final Operation currentOp,
-          final ByteBuffer rbuf, final MemcachedNode node) throws IOException {
+  private void readBufferAndLogMetrics(final Operation currentOp, final ByteBuffer rbuf, final MemcachedNode node)
+      throws IOException {
     currentOp.readFromBuffer(rbuf);
     if (currentOp.getState() == OperationState.COMPLETE) {
-      getLogger().debug("Completed read op: %s and giving the next %d "
-        + "bytes", currentOp, rbuf.remaining());
+      getLogger().debug("Completed read op: %s and giving the next %d " + "bytes", currentOp, rbuf.remaining());
       Operation op = node.removeCurrentReadOp();
-      assert op == currentOp : "Expected to pop " + currentOp + " got "
-        + op;
+      assert op == currentOp : "Expected to pop " + currentOp + " got " + op;
 
       if (op.hasErrored()) {
         metrics.markMeter(OVERALL_RESPONSE_FAIL_METRIC);
@@ -354,13 +325,10 @@ public class UDPMemcachedConnection extends MemcachedConnection {
       }
     } else if (currentOp.getState() == OperationState.RETRY) {
       handleRetryInformation(currentOp.getErrorMsg());
-      getLogger().debug("Reschedule read op due to NOT_MY_VBUCKET error: "
-        + "%s ", currentOp);
-      ((VBucketAware) currentOp).addNotMyVbucketNode(
-        currentOp.getHandlingNode());
+      getLogger().debug("Reschedule read op due to NOT_MY_VBUCKET error: " + "%s ", currentOp);
+      ((VBucketAware) currentOp).addNotMyVbucketNode(currentOp.getHandlingNode());
       Operation op = node.removeCurrentReadOp();
-      assert op == currentOp : "Expected to pop " + currentOp + " got "
-        + op;
+      assert op == currentOp : "Expected to pop " + currentOp + " got " + op;
 
       retryOps.add(currentOp);
       metrics.markMeter(OVERALL_RESPONSE_RETRY_METRIC);

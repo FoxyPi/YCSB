@@ -1,0 +1,25 @@
+Selection key is not valid.
+[OVERALL], RunTime(ms), 354
+[OVERALL], Throughput(ops/sec), 2824.858757062147
+[TOTAL_GCS_PS_Scavenge], Count, 4
+[TOTAL_GC_TIME_PS_Scavenge], Time(ms), 11
+[TOTAL_GC_TIME_%_PS_Scavenge], Time(%), 3.1073446327683616
+[TOTAL_GCS_PS_MarkSweep], Count, 0
+[TOTAL_GC_TIME_PS_MarkSweep], Time(ms), 0
+[TOTAL_GC_TIME_%_PS_MarkSweep], Time(%), 0.0
+[TOTAL_GCs], Count, 4
+[TOTAL_GC_TIME], Time(ms), 11
+[TOTAL_GC_TIME_%], Time(%), 3.1073446327683616
+[CLEANUP], Operations, 8
+[CLEANUP], AverageLatency(us), 34648.5
+[CLEANUP], MinLatency(us), 13648
+[CLEANUP], MaxLatency(us), 45855
+[CLEANUP], 95thPercentileLatency(us), 45855
+[CLEANUP], 99thPercentileLatency(us), 45855
+[INSERT], Operations, 1000
+[INSERT], AverageLatency(us), 2012.634
+[INSERT], MinLatency(us), 357
+[INSERT], MaxLatency(us), 54847
+[INSERT], 95thPercentileLatency(us), 7151
+[INSERT], 99thPercentileLatency(us), 22783
+[INSERT], Return=OK, 1000

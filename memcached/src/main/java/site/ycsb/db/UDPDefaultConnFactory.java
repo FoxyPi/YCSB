@@ -5,7 +5,6 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.nio.channels.DatagramChannel;
-import java.nio.channels.SocketChannel;
 import java.util.List;
 
 import net.spy.memcached.DefaultConnectionFactory;
@@ -13,16 +12,16 @@ import net.spy.memcached.MemcachedConnection;
 import net.spy.memcached.MemcachedNode;
 
 public class UDPDefaultConnFactory extends DefaultConnectionFactory {
-    private int thisThreadN;
-    public UDPDefaultConnFactory(int threadN) {
+    //public static final int DEFAULT_READ_BUFFER_SIZE = 65536 - 100; /*padding*/
+
+    public UDPDefaultConnFactory() {
         super();
-        this.thisThreadN = threadN;
     }
 
     @Override
     public MemcachedConnection createConnection(List<InetSocketAddress> addrs) throws IOException {
         return new UDPMemcachedConnection(getReadBufSize(), this, addrs, getInitialObservers(), getFailureMode(),
-                getOperationFactory(), thisThreadN);
+                getOperationFactory());
     }
 
     public MemcachedNode createMemcachedNode(SocketAddress sa, DatagramChannel c, int bufSize) {
