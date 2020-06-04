@@ -18,6 +18,7 @@
 package site.ycsb.db;
 
 import site.ycsb.ByteIterator;
+import site.ycsb.Client;
 import site.ycsb.DB;
 import site.ycsb.DBException;
 import site.ycsb.Status;
@@ -36,6 +37,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.Vector;
 import net.spy.memcached.ConnectionFactoryBuilder;
+import net.spy.memcached.DefaultHashAlgorithm;
 import net.spy.memcached.FailureMode;
 // We also use `net.spy.memcached.MemcachedClient`; it is not imported
 // explicitly and referred to with its full path to avoid conflicts with the
@@ -95,7 +97,7 @@ public class MemcachedClient extends DB {
 
   public static final String FAILURE_MODE_PROPERTY = "memcached.failureMode";
   public static final FailureMode FAILURE_MODE_PROPERTY_DEFAULT =
-      FailureMode.Redistribute;
+      FailureMode.Retry;
 
   public static final String PROTOCOL_PROPERTY = "memcached.protocol";
   public static final ConnectionFactoryBuilder.Protocol DEFAULT_PROTOCOL =
@@ -105,20 +107,24 @@ public class MemcachedClient extends DB {
    * The MemcachedClient implementation that will be used to communicate
    * with the memcached server.
    */
-  private net.spy.memcached.MemcachedClient client;
+  private net.spy.memcached.MemcachedClient[] client;
 
   /**
    * @returns Underlying Memcached protocol client, implemented by
    *     SpyMemcached.
    */
-  protected net.spy.memcached.MemcachedClient memcachedClient() {
-    return client;
+  protected net.spy.memcached.MemcachedClient memcachedClient(int index) {
+    return client[index];
   }
+
+  private int threadCount;
 
   @Override
   public void init() throws DBException {
+    threadCount = Client.threadcount;
+    client = new net.spy.memcached.MemcachedClient[threadCount];
     try {
-      client = createMemcachedClient();
+      client[0] = createMemcachedClient(0);
       checkOperationStatus = Boolean.parseBoolean(
           getProperties().getProperty(CHECK_OPERATION_STATUS_PROPERTY,
                                       CHECK_OPERATION_STATUS_DEFAULT));
@@ -133,25 +139,25 @@ public class MemcachedClient extends DB {
     }
   }
 
-  protected net.spy.memcached.MemcachedClient createMemcachedClient()
+  protected net.spy.memcached.MemcachedClient createMemcachedClient(int index)
       throws Exception {
-    ConnectionFactoryBuilder udpConnectionFactoryBuilder =
+    ConnectionFactoryBuilder connectionFactoryBuilder =
         new ConnectionFactoryBuilder();
 
-    udpConnectionFactoryBuilder.setReadBufferSize(Integer.parseInt(
+    connectionFactoryBuilder.setReadBufferSize(Integer.parseInt(
         getProperties().getProperty(READ_BUFFER_SIZE_PROPERTY,
                                     DEFAULT_READ_BUFFER_SIZE)));
 
-    udpConnectionFactoryBuilder.setOpTimeout(Integer.parseInt(
+    connectionFactoryBuilder.setOpTimeout(Integer.parseInt(
         getProperties().getProperty(OP_TIMEOUT_PROPERTY, DEFAULT_OP_TIMEOUT)));
 
     String protocolString = getProperties().getProperty(PROTOCOL_PROPERTY);
-    udpConnectionFactoryBuilder.setProtocol(
+    connectionFactoryBuilder.setProtocol(
         protocolString == null ? DEFAULT_PROTOCOL
                          : ConnectionFactoryBuilder.Protocol.valueOf(protocolString.toUpperCase()));
 
     String failureString = getProperties().getProperty(FAILURE_MODE_PROPERTY);
-    udpConnectionFactoryBuilder.setFailureMode(
+    connectionFactoryBuilder.setFailureMode(
         failureString == null ? FAILURE_MODE_PROPERTY_DEFAULT
                               : FailureMode.valueOf(failureString));
 
@@ -167,13 +173,14 @@ public class MemcachedClient extends DB {
       int port = DEFAULT_PORT;
       String host = address;
       if (colon != -1) {
-        port = Integer.parseInt(address.substring(colon + 1));
+        port = Integer.parseInt(address.substring(colon + 1)) + index;
+        System.out.println("Port: " + port);
         host = address.substring(0, colon);
       }
       addresses.add(new InetSocketAddress(host, port));
     }
     return new net.spy.memcached.MemcachedClient(
-        udpConnectionFactoryBuilder.build(), addresses);
+        connectionFactoryBuilder.build(), addresses);
   }
 
   @Override
@@ -182,7 +189,14 @@ public class MemcachedClient extends DB {
       Map<String, ByteIterator> result) {
     key = createQualifiedKey(table, key);
     try {
-      GetFuture<Object> future = memcachedClient().asyncGet(key);
+      int index = (int) (DefaultHashAlgorithm.CRC_HASH.hash(key) % threadCount);
+      net.spy.memcached.MemcachedClient memClient = client[index];
+      
+      if(memClient == null){
+        memClient = createMemcachedClient(index);
+        client[index] = memClient;
+      }
+      GetFuture<Object> future = memClient.asyncGet(key);
       Object document = future.get();
       if (document != null) {
         fromJson(((String) document).substring(10), fields, result);
@@ -206,8 +220,16 @@ public class MemcachedClient extends DB {
       String table, String key, Map<String, ByteIterator> values) {
     key = createQualifiedKey(table, key);
     try {
+      int index = (int) (DefaultHashAlgorithm.CRC_HASH.hash(key) % threadCount);
+      net.spy.memcached.MemcachedClient memClient = client[index];
+      
+      if(memClient == null){
+        memClient = createMemcachedClient(index);
+        client[index] = memClient;
+      }
+
       OperationFuture<Boolean> future =
-          memcachedClient().replace(key, objectExpirationTime, toJson(values));
+          memClient.replace(key, objectExpirationTime, toJson(values));
       return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error updating value with key: " + key, e);
@@ -221,9 +243,17 @@ public class MemcachedClient extends DB {
     key = createQualifiedKey(table, key);
     try {
       
+      int index = (int) (DefaultHashAlgorithm.CRC_HASH.hash(key) % threadCount);
+      index = index < 0 ? index + threadCount : index;
+      net.spy.memcached.MemcachedClient memClient = client[index];
+      
+      if(memClient == null){
+        memClient = createMemcachedClient(index);
+        client[index] = memClient;
+      }
+
       OperationFuture<Boolean> future =
-          memcachedClient().add(key, objectExpirationTime, toJson(values));
-      System.out.println("Returning");
+          memClient.add(key, objectExpirationTime, toJson(values));
       return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error inserting value", e);
@@ -235,7 +265,15 @@ public class MemcachedClient extends DB {
   public Status delete(String table, String key) {
     key = createQualifiedKey(table, key);
     try {
-      OperationFuture<Boolean> future = memcachedClient().delete(key);
+      int index = (int) (DefaultHashAlgorithm.CRC_HASH.hash(key) % threadCount);
+      net.spy.memcached.MemcachedClient memClient = client[index];
+      
+      if(memClient == null){
+        memClient = createMemcachedClient(index);
+        client[index] = memClient;
+      }
+
+      OperationFuture<Boolean> future = memClient.delete(key);
       return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error deleting value", e);
@@ -259,8 +297,11 @@ public class MemcachedClient extends DB {
 
   @Override
   public void cleanup() throws DBException {
-    if (client != null) {
-      memcachedClient().shutdown(shutdownTimeoutMillis, MILLISECONDS);
+    for(int i = 0; i < threadCount; i++){
+      net.spy.memcached.MemcachedClient memClient = client[i];
+      if (memClient != null) {
+        memClient.shutdown(shutdownTimeoutMillis, MILLISECONDS);
+      }
     }
   }
 
