@@ -265,6 +265,12 @@ public class UDPMemcachedConnection extends MemcachedConnection {
       datagramBuffer.flip();
       datagramBuffer.position(8);
       int read = datagramBuffer.remaining();
+      byte[] b = new byte[read]; 
+      datagramBuffer.get(b);
+
+      System.out.println(new String(b));
+      
+      datagramBuffer.position(8);
       /*
        * byte[] b = new byte[read]; datagramBuffer.get(b); String[] tokens = new
        * String(b).split("\r\n"); int ntokens = tokens.length; int lastbyte = 0;

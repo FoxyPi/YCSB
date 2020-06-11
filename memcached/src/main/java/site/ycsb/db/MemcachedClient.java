@@ -111,6 +111,8 @@ public class MemcachedClient extends DB {
    */
   private net.spy.memcached.MemcachedClient[] client;
 
+  private Map<Integer, Byte> keyLambda; 
+
   /**
    * @returns Underlying Memcached protocol client, implemented by
    *     SpyMemcached.
@@ -119,12 +121,89 @@ public class MemcachedClient extends DB {
     return client[index];
   }
 
-  private int threadCount;
+  private static int threadCount;
+
+  public static long _MurmurHash3_ (byte[] data, int lambda, int length)
+  {
+    final int c1 = 0xcc9e2d51;
+    final int c2 = 0x1b873593;
+    int h1 = 0;
+
+    int roundedEnd = length & 0xfffffffc;  // round down to 4 byte block
+
+    //lambda
+    int k1 = lambda*'A';
+
+    k1 *= c1;
+    k1 = (k1 << 15) | (k1 >> 17);  //ROTL32(k1,15);
+    k1 *= c2;
+
+    h1 ^= k1;
+    h1 = (h1 << 13) | (h1 >> 19);  //ROTL32(h1,13);
+    h1 = h1*5+0xe6546b64;
+
+
+
+
+    for (int i=0; i<length - 4; i+=4) {
+      // little endian load order
+      k1 = (data[i] & 0xff) | ((data[i+1] & 0xff) << 8) | ((data[i+2] & 0xff) << 16) | (data[i+3] << 24);
+      
+      k1 *= c1;
+      k1 = (k1 << 15) | (k1 >> 17);  // ROTL32(k1,15);
+      k1 *= c2;
+
+      h1 ^= k1;
+      //h1 = (h1 << 13) | (h1 >> 19);  // ROTL32(h1,13);
+      h1 = h1*5+0xe6546b64;
+    }
+
+    // tail
+    k1 = 0;
+
+    switch(length & 0x03) {
+      case 3:
+        k1 = (data[roundedEnd + 2] & 0xff) << 16;
+        // fallthrough
+      case 2:
+        k1 |= (data[roundedEnd + 1] & 0xff) << 8;
+        // fallthrough
+      case 1:
+        k1 |= (data[roundedEnd] & 0xff);
+        k1 *= c1;
+        k1 = (k1 << 15) | (k1 >> 17);  // ROTL32(k1,15);
+        k1 *= c2;
+        h1 ^= k1;
+    }
+
+    // finalization
+    h1 ^= length;
+
+    // fmix(h1);
+    h1 ^= h1 >> 16;
+    h1 *= 0x85ebca6b;
+    h1 ^= h1 >> 13;
+    h1 *= 0xc2b2ae35;
+    h1 ^= h1 >> 16;
+
+    return h1;
+  }
+
+  public static int djb2_variant_index_hash(String str,int size, int lambda)
+  {
+    // changed to murmurhash due to colisions and visible patterns
+    long hashy =  _MurmurHash3_(str.getBytes(), lambda, size);
+    
+    int res = (int) Math.abs(hashy % threadCount);
+    return res;
+  }
+
 
   @Override
   public void init() throws DBException {
     threadCount = Client.threadcount;
     client = new net.spy.memcached.MemcachedClient[threadCount];
+    keyLambda = new HashMap<>();
     try {
       client[0] = createMemcachedClient(0);
       checkOperationStatus = Boolean.parseBoolean(
@@ -189,26 +268,48 @@ public class MemcachedClient extends DB {
       String table, String key, Set<String> fields,
       Map<String, ByteIterator> result) {
     key = createQualifiedKey(table, key);
-    try {
-      int index = (int) (DefaultHashAlgorithm.CRC_HASH.hash(key) % threadCount);
-      net.spy.memcached.MemcachedClient memClient = client[index];
-      
-      if(memClient == null){
-        memClient = createMemcachedClient(index);
-        client[index] = memClient;
-      }
+    
+    boolean retry = false;
 
-      GetFuture<Object> future = memClient.asyncGet(key);
-      Object document = future.get();
-      if (document != null) {
-        fromJson(((String) document).substring(10), fields, result);        
+    for(int i = 0; i < 2; i++){
+      try {
+        int keyHash = (int) DefaultHashAlgorithm.CRC_HASH.hash(key);
+        
+        if(!keyLambda.containsKey(keyHash))
+          keyLambda.put(keyHash, (byte)0);
+        
+        byte lambda = retry ? 0 : (byte)(Math.random() * (keyLambda.get(keyHash) + 1));
+        
+        //int index =  (keyHash % threadCount) + (int)(Math.random() * (keyLambda.get(keyHash) + 1)); 
+        int index = djb2_variant_index_hash(key, key.length(), lambda);
+        //int index = djb2_variant_index_hash(key, key.length(), 0);
+        
+        net.spy.memcached.MemcachedClient memClient = client[index];
+        
+        if(memClient == null){
+          memClient = createMemcachedClient(index);
+          client[index] = memClient;
+        }
+        GetFuture<Object> future = memClient.asyncGet(key);
+        Object document = future.get();
+
+        lambda = Byte.parseByte(((String) document).substring(3, 5));
+        keyLambda.put(keyHash, lambda);
+        
+        //System.out.println("key: " + key + "lambda: " + lambda + "index: " + index);
+
+        if (document != null) {
+          fromJson(((String) document).substring(10), fields, result);
+        }
+
+        return Status.OK;
+      } catch (Exception e) {
+        System.out.println("CHAVE AO POSTE");
+        logger.error("Error encountered for key: " + key, e);
+        retry = true;
       }
-      return Status.OK;
-    } catch (Exception e) {
-      System.out.println("Error encountered for key: " + key);
-      System.out.println(e.getMessage());
-      return Status.ERROR;
     }
+    return Status.ERROR;
   }
 
   @Override
@@ -223,7 +324,15 @@ public class MemcachedClient extends DB {
       String table, String key, Map<String, ByteIterator> values) {
     key = createQualifiedKey(table, key);
     try {
-      int index = (int) (DefaultHashAlgorithm.CRC_HASH.hash(key) % threadCount);
+      int keyHash = (int) DefaultHashAlgorithm.CRC_HASH.hash(key);
+      if(!keyLambda.containsKey(keyHash))
+        keyLambda.put(keyHash, (byte)0);
+      
+      
+      //int index =  (keyHash % threadCount) + (int)(Math.random() * (keyLambda.get(keyHash) + 1)); 
+      //int index = djb2_variant_index_hash(key, key.length(), (int)(Math.random() * (keyLambda.get(keyHash) + 1)));
+      int index = djb2_variant_index_hash(key, key.length(), 0);
+
       net.spy.memcached.MemcachedClient memClient = client[index];
       
       if(memClient == null){
@@ -245,9 +354,14 @@ public class MemcachedClient extends DB {
       String table, String key, Map<String, ByteIterator> values) {
     key = createQualifiedKey(table, key);
     try {
-      int index = (int) (DefaultHashAlgorithm.CRC_HASH.hash(key) % threadCount);
-      net.spy.memcached.MemcachedClient memClient = client[index];
+      int keyHash = (int) DefaultHashAlgorithm.CRC_HASH.hash(key);
+      if(!keyLambda.containsKey(keyHash))
+        keyLambda.put(keyHash, (byte)0);
+
+      int index = djb2_variant_index_hash(key, key.length(), (int)(Math.random() * (keyLambda.get(keyHash) + 1)));
+      System.out.println("key: " + key + "index: " + index);
       
+      net.spy.memcached.MemcachedClient memClient = client[index];
       if(memClient == null){
         memClient = createMemcachedClient(index);
         client[index] = memClient;
