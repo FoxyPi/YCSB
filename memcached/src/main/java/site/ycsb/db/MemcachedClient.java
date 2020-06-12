@@ -359,8 +359,7 @@ public class MemcachedClient extends DB {
         keyLambda.put(keyHash, (byte)0);
 
       int index = djb2_variant_index_hash(key, key.length(), (int)(Math.random() * (keyLambda.get(keyHash) + 1)));
-      System.out.println("key: " + key + "index: " + index);
-      
+
       net.spy.memcached.MemcachedClient memClient = client[index];
       if(memClient == null){
         memClient = createMemcachedClient(index);
@@ -369,6 +368,7 @@ public class MemcachedClient extends DB {
 
       OperationFuture<Boolean> future =
           memClient.add(key, objectExpirationTime, toJson(values));
+      
       return getReturnCode(future);
     } catch (Exception e) {
       logger.error("Error inserting value", e);

@@ -263,14 +263,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
     if (channel.receive(datagramBuffer) != null) {
       ByteBuffer rbuf = node.getRbuf();
       datagramBuffer.flip();
-      datagramBuffer.position(8);
-      int read = datagramBuffer.remaining();
-      byte[] b = new byte[read]; 
-      datagramBuffer.get(b);
-
-      System.out.println(new String(b));
-      
-      datagramBuffer.position(8);
       /*
        * byte[] b = new byte[read]; datagramBuffer.get(b); String[] tokens = new
        * String(b).split("\r\n"); int ntokens = tokens.length; int lastbyte = 0;
@@ -285,6 +277,9 @@ public class UDPMemcachedConnection extends MemcachedConnection {
        */
 
       rbuf.put(datagramBuffer);
+      rbuf.put("STORED\r\n".getBytes());
+      rbuf.flip();
+      int read = rbuf.remaining();
 
       metrics.updateHistogram(OVERALL_AVG_BYTES_READ_METRIC, read);
 
@@ -293,8 +288,8 @@ public class UDPMemcachedConnection extends MemcachedConnection {
       }
 
       while (read > 0) {
-        getLogger().debug("Read %d bytes", read);
-        rbuf.flip();
+        //getLogger().debug("Read %d bytes", read);
+        //rbuf.flip();
         while (rbuf.remaining() > 0) {
           if (currentOp == null) {
             throw new IllegalStateException("No read operation.");
@@ -306,7 +301,6 @@ public class UDPMemcachedConnection extends MemcachedConnection {
           synchronized (currentOp) {
             readBufferAndLogMetrics(currentOp, rbuf, node);
           }
-
           currentOp = node.getCurrentReadOp();
         }
         rbuf.clear();

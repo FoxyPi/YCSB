@@ -599,7 +599,7 @@ public class CoreWorkload extends Workload {
     int numOfRetries = 0;
     do {
       status = db.insert(table, dbkey, values);
-      if (null != status && status.isOk()) {
+      if (null != status) {
         break;
       }
       // Retry if configured. Without retrying, the load process will fail
@@ -623,7 +623,7 @@ public class CoreWorkload extends Workload {
       }
     } while (true);
 
-    return null != status && status.isOk();
+    return null != status;
   }
 
   /**
